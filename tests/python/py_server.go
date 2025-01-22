@@ -1,4 +1,4 @@
-// +build integration
+//go:build integration
 
 package uatest
 
@@ -14,8 +14,14 @@ import (
 	"github.com/gopcua/opcua/ua"
 )
 
-// Server runs a python test server.
-type Server struct {
+// todo(fs): not sure we need this here
+type Server interface {
+	URL() string
+	Close() error
+}
+
+// PythonServer runs a python test server.
+type PythonServer struct {
 	// Path is the path to the Python server.
 	Path string
 
@@ -31,17 +37,17 @@ type Server struct {
 	waitch chan error
 }
 
-// NewServer creates a test server and starts it. The function
+// NewPythonServer creates a test server and starts it. The function
 // panics if the server cannot be started.
-func NewServer(path string) *Server {
-	s := &Server{Path: path, waitch: make(chan error)}
+func NewPythonServer(path string) *PythonServer {
+	s := &PythonServer{Path: path, waitch: make(chan error)}
 	if err := s.Run(); err != nil {
 		panic(err)
 	}
 	return s
 }
 
-func (s *Server) Run() error {
+func (s *PythonServer) Run() error {
 	wd, err := os.Getwd()
 	if err != nil {
 		return err
@@ -92,7 +98,7 @@ func (s *Server) Run() error {
 	}
 }
 
-func (s *Server) Close() error {
+func (s *PythonServer) Close() error {
 	if s.cmd == nil {
 		return errors.Errorf("not running")
 	}

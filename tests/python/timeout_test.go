@@ -1,4 +1,4 @@
-// +build integration
+//go:build integration
 
 package uatest
 
@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/gopcua/opcua"
+	"github.com/gopcua/opcua/errors"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -19,13 +21,14 @@ const (
 )
 
 func TestClientTimeoutViaOptions(t *testing.T) {
-	c := opcua.NewClient(tcpNoRstTestServer, opcua.DialTimeout(forceTimeoutDuration))
-
+	c, err := opcua.NewClient(tcpNoRstTestServer, opcua.DialTimeout(forceTimeoutDuration))
+	require.NoError(t, err, "NewClient failed")
 	connectAndValidate(t, c, context.Background(), forceTimeoutDuration)
 }
 
 func TestClientTimeoutViaContext(t *testing.T) {
-	c := opcua.NewClient(tcpNoRstTestServer)
+	c, err := opcua.NewClient(tcpNoRstTestServer)
+	require.NoError(t, err, "NewClient failed")
 
 	ctx, cancel := context.WithTimeout(context.Background(), forceTimeoutDuration)
 	defer cancel()
@@ -37,24 +40,24 @@ func connectAndValidate(t *testing.T, c *opcua.Client, ctx context.Context, d ti
 	start := time.Now()
 
 	err := c.Connect(ctx)
-	if err == nil {
-		t.Fatal("err should not be nil")
-	}
+	require.Error(t, err, "Connect should fail")
 
 	elapsed := time.Since(start)
 
-	if oe, ok := err.(*net.OpError); ok {
-		if !oe.Timeout() {
-			t.Fatalf("got %#v, wanted net.timeoutError", oe.Unwrap())
-		}
-	} else {
-		t.Fatalf("got %T, wanted %T", err, net.OpError{})
+	var oe *net.OpError
+	switch {
+	case errors.As(err, &oe) && !oe.Timeout():
+		require.Fail(t, "got %#v, wanted net.timeoutError", oe.Unwrap())
+	case errors.As(err, &oe):
+		// ignore
+	default:
+		require.Fail(t, "got %T, wanted %T", err, &net.OpError{})
 	}
 
 	pct := 0.05
 
 	if !within(elapsed, d, pct) {
-		t.Fatalf("took %s, expected %s +/- %v%%", elapsed, d, pct*100)
+		require.Fail(t, "took %s, expected %s +/- %v%%", elapsed, d, pct*100)
 	}
 }
 

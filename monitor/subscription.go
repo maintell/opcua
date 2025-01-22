@@ -56,7 +56,7 @@ func (m *Item) NodeID() *ua.NodeID {
 	return m.nodeID
 }
 
-// Request is a struct to manage a request to monitor a node
+// Request is a struct to manage a request to monitor a node or modify a monitored node
 type Request struct {
 	NodeID               *ua.NodeID
 	MonitoringMode       ua.MonitoringMode
@@ -102,11 +102,11 @@ func newSubscription(ctx context.Context, m *NodeMonitor, params *opcua.Subscrip
 	}
 
 	var err error
-	if s.sub, err = m.client.SubscribeWithContext(ctx, params, s.internalNotifyCh); err != nil {
+	if s.sub, err = m.client.Subscribe(ctx, params, s.internalNotifyCh); err != nil {
 		return nil, err
 	}
 
-	if err = s.AddNodesWithContext(ctx, nodes...); err != nil {
+	if err = s.AddNodes(ctx, nodes...); err != nil {
 		return nil, err
 	}
 
@@ -223,6 +223,12 @@ func (s *Subscription) pump(ctx context.Context, notifyCh chan<- *DataChangeMess
 	}
 }
 
+// Modify modifies the subscription settings
+func (s *Subscription) Modify(ctx context.Context, params *opcua.SubscriptionParameters) error {
+	_, err := s.sub.ModifySubscription(ctx, *params)
+	return err
+}
+
 // Unsubscribe removes the subscription interests and cleans up any resources
 func (s *Subscription) Unsubscribe(ctx context.Context) error {
 	// TODO: make idempotent
@@ -254,32 +260,16 @@ func (s *Subscription) Dropped() uint64 {
 }
 
 // AddNodes adds nodes defined by their string representation
-//
-// Note: Starting with v0.5 this method will require a context
-// and the corresponding XXXWithContext(ctx) method will be removed.
-func (s *Subscription) AddNodes(nodes ...string) error {
-	return s.AddNodesWithContext(context.Background(), nodes...)
-}
-
-// Note: Starting with v0.5 this method is superseded by the non 'WithContext' method.
-func (s *Subscription) AddNodesWithContext(ctx context.Context, nodes ...string) error {
+func (s *Subscription) AddNodes(ctx context.Context, nodes ...string) error {
 	nodeIDs, err := parseNodeSlice(nodes...)
 	if err != nil {
 		return err
 	}
-	return s.AddNodeIDsWithContext(ctx, nodeIDs...)
+	return s.AddNodeIDs(ctx, nodeIDs...)
 }
 
 // AddNodeIDs adds nodes
-//
-// Note: Starting with v0.5 this method will require a context
-// and the corresponding XXXWithContext(ctx) method will be removed.
-func (s *Subscription) AddNodeIDs(nodes ...*ua.NodeID) error {
-	return s.AddNodeIDsWithContext(context.Background(), nodes...)
-}
-
-// Note: Starting with v0.5 this method is superseded by the non 'WithContext' method.
-func (s *Subscription) AddNodeIDsWithContext(ctx context.Context, nodes ...*ua.NodeID) error {
+func (s *Subscription) AddNodeIDs(ctx context.Context, nodes ...*ua.NodeID) error {
 	requests := make([]Request, len(nodes))
 
 	for i, node := range nodes {
@@ -288,20 +278,12 @@ func (s *Subscription) AddNodeIDsWithContext(ctx context.Context, nodes ...*ua.N
 			MonitoringMode: ua.MonitoringModeReporting,
 		}
 	}
-	_, err := s.AddMonitorItemsWithContext(ctx, requests...)
+	_, err := s.AddMonitorItems(ctx, requests...)
 	return err
 }
 
 // AddMonitorItems adds nodes with monitoring parameters to the subscription
-//
-// Note: Starting with v0.5 this method will require a context
-// and the corresponding XXXWithContext(ctx) method will be removed.
-func (s *Subscription) AddMonitorItems(nodes ...Request) ([]Item, error) {
-	return s.AddMonitorItemsWithContext(context.Background(), nodes...)
-}
-
-// Note: Starting with v0.5 this method is superseded by the non 'WithContext' method.
-func (s *Subscription) AddMonitorItemsWithContext(ctx context.Context, nodes ...Request) ([]Item, error) {
+func (s *Subscription) AddMonitorItems(ctx context.Context, nodes ...Request) ([]Item, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -328,7 +310,7 @@ func (s *Subscription) AddMonitorItemsWithContext(ctx context.Context, nodes ...
 		}
 		toAdd = append(toAdd, request)
 	}
-	resp, err := s.sub.MonitorWithContext(ctx, ua.TimestampsToReturnBoth, toAdd...)
+	resp, err := s.sub.Monitor(ctx, ua.TimestampsToReturnBoth, toAdd...)
 	if err != nil {
 		return nil, err
 	}
@@ -358,32 +340,16 @@ func (s *Subscription) AddMonitorItemsWithContext(ctx context.Context, nodes ...
 }
 
 // RemoveNodes removes nodes defined by their string representation
-//
-// Note: Starting with v0.5 this method will require a context
-// and the corresponding XXXWithContext(ctx) method will be removed.
-func (s *Subscription) RemoveNodes(nodes ...string) error {
-	return s.RemoveNodesWithContext(context.Background(), nodes...)
-}
-
-// Note: Starting with v0.5 this method is superseded by the non 'WithContext' method.
-func (s *Subscription) RemoveNodesWithContext(ctx context.Context, nodes ...string) error {
+func (s *Subscription) RemoveNodes(ctx context.Context, nodes ...string) error {
 	nodeIDs, err := parseNodeSlice(nodes...)
 	if err != nil {
 		return err
 	}
-	return s.RemoveNodeIDsWithContext(ctx, nodeIDs...)
+	return s.RemoveNodeIDs(ctx, nodeIDs...)
 }
 
 // RemoveNodeIDs removes nodes
-//
-// Note: Starting with v0.5 this method will require a context
-// and the corresponding XXXWithContext(ctx) method will be removed.
-func (s *Subscription) RemoveNodeIDs(nodes ...*ua.NodeID) error {
-	return s.RemoveNodeIDsWithContext(context.Background(), nodes...)
-}
-
-// Note: Starting with v0.5 this method is superseded by the non 'WithContext' method.
-func (s *Subscription) RemoveNodeIDsWithContext(ctx context.Context, nodes ...*ua.NodeID) error {
+func (s *Subscription) RemoveNodeIDs(ctx context.Context, nodes ...*ua.NodeID) error {
 	if len(nodes) == 0 {
 		return nil
 	}
@@ -398,19 +364,11 @@ func (s *Subscription) RemoveNodeIDsWithContext(ctx context.Context, nodes ...*u
 		}
 	}
 
-	return s.RemoveMonitorItemsWithContext(ctx, toRemove...)
+	return s.RemoveMonitorItems(ctx, toRemove...)
 }
 
 // RemoveMonitorItems removes nodes
-//
-// Note: Starting with v0.5 this method will require a context
-// and the corresponding XXXWithContext(ctx) method will be removed.
-func (s *Subscription) RemoveMonitorItems(items ...Item) error {
-	return s.RemoveMonitorItemsWithContext(context.Background())
-}
-
-// Note: Starting with v0.5 this method is superseded by the non 'WithContext' method.
-func (s *Subscription) RemoveMonitorItemsWithContext(ctx context.Context, items ...Item) error {
+func (s *Subscription) RemoveMonitorItems(ctx context.Context, items ...Item) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -429,7 +387,7 @@ func (s *Subscription) RemoveMonitorItemsWithContext(ctx context.Context, items 
 		toRemove = append(toRemove, item.id)
 	}
 
-	resp, err := s.sub.UnmonitorWithContext(ctx, toRemove...)
+	resp, err := s.sub.Unmonitor(ctx, toRemove...)
 	if err != nil {
 		return err
 	}
@@ -451,17 +409,127 @@ func (s *Subscription) RemoveMonitorItemsWithContext(ctx context.Context, items 
 	return nil
 }
 
-// Stats returns statistics for the subscription
-//
-// Note: Starting with v0.5 this method will require a context
-// and the corresponding XXXWithContext(ctx) method will be removed.
-func (s *Subscription) Stats() (*ua.SubscriptionDiagnosticsDataType, error) {
-	return s.StatsWithContext(context.Background())
+// ModifyMonitorItems modifies nodes with monitoring parameters to the subscription
+func (s *Subscription) ModifyMonitorItems(ctx context.Context, nodes ...Request) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(nodes) == 0 {
+		return nil
+	}
+
+	toModify := make([]*ua.MonitoredItemModifyRequest, 0)
+
+	for _, node := range nodes {
+		for _, item := range s.itemLookup {
+			if item.nodeID.String() != node.NodeID.String() {
+				continue
+			}
+
+			if node.MonitoringParameters == nil {
+				break
+			}
+
+			request := &ua.MonitoredItemModifyRequest{
+				MonitoredItemID:     item.id,
+				RequestedParameters: node.MonitoringParameters,
+			}
+			request.RequestedParameters.ClientHandle = item.handle
+			toModify = append(toModify, request)
+			break
+		}
+	}
+
+	resp, err := s.sub.ModifyMonitoredItems(ctx, ua.TimestampsToReturnBoth, toModify...)
+	if err != nil {
+		return err
+	}
+
+	if resp.ResponseHeader.ServiceResult != ua.StatusOK {
+		return resp.ResponseHeader.ServiceResult
+	}
+
+	if len(resp.Results) != len(toModify) {
+		return errors.Errorf("modify monitored items response length mismatch")
+	}
+
+	for _, res := range resp.Results {
+		if res.StatusCode != ua.StatusOK {
+			return res.StatusCode
+		}
+	}
+
+	return nil
 }
 
-// Note: Starting with v0.5 this method is superseded by the non 'WithContext' method.
-func (s *Subscription) StatsWithContext(ctx context.Context) (*ua.SubscriptionDiagnosticsDataType, error) {
-	return s.sub.StatsWithContext(ctx)
+// SetMonitoringModeForNodes sets the monitoring mode for nodes defined by their string representation
+func (s *Subscription) SetMonitoringModeForNodes(ctx context.Context, monitoringMode ua.MonitoringMode, nodes ...string) error {
+	nodeIDs, err := parseNodeSlice(nodes...)
+	if err != nil {
+		return err
+	}
+
+	return s.SetMonitoringModeForNodeIDs(ctx, monitoringMode, nodeIDs...)
+}
+
+// SetMonitoringModeForNodeIDs sets the monitoring mode for nodes
+func (s *Subscription) SetMonitoringModeForNodeIDs(ctx context.Context, monitoringMode ua.MonitoringMode, nodes ...*ua.NodeID) error {
+	if len(nodes) == 0 {
+		return nil
+	}
+
+	var toSet []Item
+	for _, node := range nodes {
+		for _, item := range s.itemLookup {
+			if item.nodeID.String() == node.String() {
+				toSet = append(toSet, item)
+				break
+			}
+		}
+	}
+
+	return s.SetMonitoringMode(ctx, monitoringMode, toSet...)
+}
+
+// SetMonitoringMode sets the monitoring mode for nodes
+func (s *Subscription) SetMonitoringMode(ctx context.Context, monitoringMode ua.MonitoringMode, items ...Item) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(items) == 0 {
+		return nil
+	}
+
+	toSet := make([]uint32, 0)
+	for _, item := range items {
+		toSet = append(toSet, item.id)
+	}
+
+	resp, err := s.sub.SetMonitoringMode(ctx, monitoringMode, toSet...)
+	if err != nil {
+		return err
+	}
+
+	if resp.ResponseHeader.ServiceResult != ua.StatusOK {
+		return resp.ResponseHeader.ServiceResult
+	}
+
+	if len(resp.Results) != len(toSet) {
+		return errors.Errorf("set monitoring mode response length mismatch")
+	}
+
+	for _, statusCode := range resp.Results {
+		if statusCode != ua.StatusOK {
+			return statusCode
+		}
+	}
+
+	return nil
+}
+
+// Stats returns statistics for the subscription
+func (s *Subscription) Stats(ctx context.Context) (*ua.SubscriptionDiagnosticsDataType, error) {
+	return s.sub.Stats(ctx)
 }
 
 func parseNodeSlice(nodes ...string) ([]*ua.NodeID, error) {

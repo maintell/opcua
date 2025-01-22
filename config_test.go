@@ -4,10 +4,11 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"encoding/pem"
-	"io/ioutil"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -15,8 +16,7 @@ import (
 	"github.com/gopcua/opcua/uacp"
 	"github.com/gopcua/opcua/uapolicy"
 	"github.com/gopcua/opcua/uasc"
-
-	"github.com/pascaldekloe/goe/verify"
+	"github.com/stretchr/testify/require"
 )
 
 // test certificate generated with
@@ -128,11 +128,7 @@ func TestOptions(t *testing.T) {
 	randomRequestID = func() uint32 { return 125 }
 	defer func() { randomRequestID = nil }()
 
-	d, err := ioutil.TempDir("", "gopcua")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(d)
+	d := t.TempDir()
 
 	var (
 		certDERFile = filepath.Join(d, "cert.der")
@@ -141,24 +137,34 @@ func TestOptions(t *testing.T) {
 		keyPEMFile  = filepath.Join(d, "key.pem")
 	)
 
-	if err := ioutil.WriteFile(certDERFile, certDER, 0644); err != nil {
-		t.Fatal(err)
+	// the error message for "file not found" is platform dependent.
+	notFoundError := func(msg, name string) error {
+		switch runtime.GOOS {
+		case "windows":
+			return fmt.Errorf("opcua: Failed to load %s: open %s: The system cannot find the file specified.", msg, name)
+		default:
+			return fmt.Errorf("opcua: Failed to load %s: open %s: no such file or directory", msg, name)
+		}
 	}
-	if err := ioutil.WriteFile(certPEMFile, certPEM, 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := ioutil.WriteFile(keyDERFile, keyDER, 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := ioutil.WriteFile(keyPEMFile, keyPEM, 0644); err != nil {
-		t.Fatal(err)
-	}
+
+	err := os.WriteFile(certDERFile, certDER, 0644)
+	require.NoError(t, err, "WriteFile(certDERFile) failed")
+
+	err = os.WriteFile(certPEMFile, certPEM, 0644)
+	require.NoError(t, err, "WriteFile(certPEMFile) failed")
+
+	err = os.WriteFile(keyDERFile, keyDER, 0644)
+	require.NoError(t, err, "WriteFile(keyDERFile) failed")
+
+	err = os.WriteFile(keyPEMFile, keyPEM, 0644)
+	require.NoError(t, err, "WriteFile(keyPEMFile) failed")
 	defer os.Remove(keyPEMFile)
 
 	tests := []struct {
 		name string
 		opt  Option
 		cfg  *Config
+		err  error
 	}{
 		{
 			name: `ApplicationName("a")`,
@@ -203,6 +209,17 @@ func TestOptions(t *testing.T) {
 						CertificateData: certDER,
 					}
 					return sc
+				}(),
+			},
+		},
+		{
+			name: `AuthPrivateKey()`,
+			opt:  AuthPrivateKey(cert.PrivateKey.(*rsa.PrivateKey)),
+			cfg: &Config{
+				sechan: func() *uasc.Config {
+					c := DefaultClientConfig()
+					c.UserKey = cert.PrivateKey.(*rsa.PrivateKey)
+					return c
 				}(),
 			},
 		},
@@ -284,6 +301,12 @@ func TestOptions(t *testing.T) {
 			},
 		},
 		{
+			name: `CertificateFile() error`,
+			opt:  CertificateFile("x"),
+			cfg:  &Config{},
+			err:  notFoundError("certificate", "x"),
+		},
+		{
 			name: `Lifetime(10ms)`,
 			opt:  Lifetime(10 * time.Millisecond),
 			cfg: &Config{
@@ -337,6 +360,12 @@ func TestOptions(t *testing.T) {
 					return c
 				}(),
 			},
+		},
+		{
+			name: `PrivateKeyFile() error`,
+			opt:  PrivateKeyFile("x"),
+			cfg:  &Config{},
+			err:  notFoundError("private key", "x"),
 		},
 		{
 			name: `ProductURI("a")`,
@@ -403,6 +432,12 @@ func TestOptions(t *testing.T) {
 					return c
 				}(),
 			},
+		},
+		{
+			name: `RemoteCertificateFile() error`,
+			opt:  RemoteCertificateFile("x"),
+			cfg:  &Config{},
+			err:  notFoundError("certificate", "x"),
 		},
 		{
 			name: `RequestTimeout(5s)`,
@@ -764,8 +799,19 @@ func TestOptions(t *testing.T) {
 				tt.cfg.session = DefaultSessionConfig()
 			}
 
-			cfg := ApplyConfig(tt.opt)
-			verify.Values(t, "", cfg, tt.cfg)
+			errstr := func(err error) string {
+				if err != nil {
+					return err.Error()
+				}
+				return ""
+			}
+
+			cfg, err := ApplyConfig(tt.opt)
+			if got, want := errstr(err), errstr(tt.err); got != "" || want != "" {
+				require.Equal(t, want, got, "got error %q want %q", got, want)
+				return
+			}
+			require.Equal(t, tt.cfg, cfg)
 		})
 	}
 }

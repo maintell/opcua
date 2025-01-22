@@ -1,14 +1,16 @@
 //go:build integration
 // +build integration
 
-package uatest
+package uatest2
 
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/gopcua/opcua"
 	"github.com/gopcua/opcua/ua"
+	"github.com/stretchr/testify/require"
 )
 
 // TestWrite performs an integration test to first write
@@ -20,23 +22,26 @@ func TestWrite(t *testing.T) {
 		status ua.StatusCode
 	}{
 		// happy flows
-		{ua.NewStringNodeID(2, "rw_bool"), false, ua.StatusOK},
-		{ua.NewStringNodeID(2, "rw_int32"), int32(9), ua.StatusOK},
+		{ua.NewStringNodeID(1, "rw_bool"), false, ua.StatusOK},
+		{ua.NewStringNodeID(1, "rw_int32"), int32(9), ua.StatusOK},
 
 		// error flows
-		{ua.NewStringNodeID(2, "ro_bool"), false, ua.StatusBadUserAccessDenied},
+		{ua.NewStringNodeID(1, "ro_bool"), false, ua.StatusBadUserAccessDenied},
 	}
 
 	ctx := context.Background()
 
-	srv := NewServer("rw_server.py")
+	srv := startServer()
 	defer srv.Close()
 
-	c := opcua.NewClient(srv.Endpoint, srv.Opts...)
-	if err := c.Connect(ctx); err != nil {
-		t.Fatal(err)
-	}
-	defer c.CloseWithContext(ctx)
+	time.Sleep(2 * time.Second)
+
+	c, err := opcua.NewClient("opc.tcp://localhost:4840", opcua.SecurityMode(ua.MessageSecurityModeNone))
+	require.NoError(t, err, "NewClient failed")
+
+	err = c.Connect(ctx)
+	require.NoError(t, err, "Connect failed")
+	defer c.Close(ctx)
 
 	for _, tt := range tests {
 		t.Run(tt.id.String(), func(t *testing.T) {
@@ -66,11 +71,7 @@ func TestWrite(t *testing.T) {
 func testWrite(t *testing.T, ctx context.Context, c *opcua.Client, status ua.StatusCode, req *ua.WriteRequest) {
 	t.Helper()
 
-	resp, err := c.WriteWithContext(ctx, req)
-	if err != nil {
-		t.Fatalf("Write failed: %s", err)
-	}
-	if got, want := resp.Results[0], status; got != want {
-		t.Fatalf("got status %v want %v", got, want)
-	}
+	resp, err := c.Write(ctx, req)
+	require.NoError(t, err, "Write failed")
+	require.Equal(t, status, resp.Results[0], "status not equal")
 }

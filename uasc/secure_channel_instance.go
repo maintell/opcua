@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gopcua/opcua/debug"
 	"github.com/gopcua/opcua/errors"
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
@@ -85,6 +86,7 @@ func (c *channelInstance) newRequestMessage(req ua.Request, reqID uint32, authTo
 
 func (c *channelInstance) newMessage(srv interface{}, typeID uint16, requestID uint32) *Message {
 	sequenceNumber := c.nextSequenceNumber()
+	debug.Printf("got sequence number %d", sequenceNumber)
 
 	switch typeID {
 	case id.OpenSecureChannelRequest_Encoding_DefaultBinary, id.OpenSecureChannelResponse_Encoding_DefaultBinary:
@@ -170,10 +172,18 @@ func (c *channelInstance) signAndEncrypt(m *Message, b []byte) ([]byte, error) {
 	var encryptedLength int
 	if c.sc.cfg.SecurityMode == ua.MessageSecurityModeSignAndEncrypt || isAsymmetric {
 		plaintextBlockSize := c.algo.PlaintextBlockSize()
-		paddingLength := plaintextBlockSize - ((len(b[headerLength:]) + c.algo.SignatureLength() + 1) % plaintextBlockSize)
+		extraPadding := c.algo.RemoteSignatureLength() > 256
+		paddingBytes := 1
+		if extraPadding {
+			paddingBytes = 2
+		}
+		paddingLength := plaintextBlockSize - ((len(b[headerLength:]) + c.algo.SignatureLength() + paddingBytes) % plaintextBlockSize)
 
 		for i := 0; i <= paddingLength; i++ {
 			b = append(b, byte(paddingLength))
+		}
+		if extraPadding {
+			b = append(b, byte(paddingLength>>8))
 		}
 		encryptedLength = ((len(b[headerLength:]) + c.algo.SignatureLength()) / plaintextBlockSize) * c.algo.BlockSize()
 	} else { // MessageSecurityModeSign
@@ -235,7 +245,13 @@ func (c *channelInstance) verifyAndDecrypt(m *MessageChunk, r []byte) ([]byte, e
 
 	var paddingLength int
 	if c.sc.cfg.SecurityMode == ua.MessageSecurityModeSignAndEncrypt || isAsymmetric {
-		paddingLength = int(messageToVerify[len(messageToVerify)-1]) + 1
+		paddingLength = int(messageToVerify[len(messageToVerify)-1])
+		if c.algo.SignatureLength() > 256 {
+			paddingLength <<= 8
+			paddingLength += int(messageToVerify[len(messageToVerify)-2])
+			paddingLength += 1
+		}
+		paddingLength += 1
 	}
 
 	b = messageToVerify[headerLength : len(messageToVerify)-paddingLength]

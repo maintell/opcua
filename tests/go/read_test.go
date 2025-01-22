@@ -1,16 +1,16 @@
 //go:build integration
 // +build integration
 
-package uatest
+package uatest2
 
 import (
 	"context"
 	"testing"
-
-	"github.com/pascaldekloe/goe/verify"
+	"time"
 
 	"github.com/gopcua/opcua"
 	"github.com/gopcua/opcua/ua"
+	"github.com/stretchr/testify/require"
 )
 
 // TestRead performs an integration test to read values
@@ -20,24 +20,28 @@ func TestRead(t *testing.T) {
 		id *ua.NodeID
 		v  interface{}
 	}{
-		{ua.NewStringNodeID(2, "ro_bool"), true},
-		{ua.NewStringNodeID(2, "rw_bool"), true},
-		{ua.NewStringNodeID(2, "ro_int32"), int32(5)},
-		{ua.NewStringNodeID(2, "rw_int32"), int32(5)},
-		{ua.NewStringNodeID(2, "array_int32"), []int32{1, 2, 3}},
-		{ua.NewStringNodeID(2, "2d_array_int32"), [][]int32{{1}, {2}, {3}}},
+		{ua.NewStringNodeID(1, "ro_bool"), true},
+		{ua.NewStringNodeID(1, "rw_bool"), true},
+		{ua.NewStringNodeID(1, "ro_int32"), int32(5)},
+		{ua.NewStringNodeID(1, "rw_int32"), int32(5)},
+		// TODO: not implemented in server yet.
+		//{ua.NewStringNodeID(2, "array_int32"), []int32{1, 2, 3}},
+		//{ua.NewStringNodeID(2, "2d_array_int32"), [][]int32{{1}, {2}, {3}}},
 	}
 
 	ctx := context.Background()
 
-	srv := NewServer("rw_server.py")
+	srv := startServer()
 	defer srv.Close()
 
-	c := opcua.NewClient(srv.Endpoint, srv.Opts...)
-	if err := c.Connect(ctx); err != nil {
-		t.Fatal(err)
-	}
-	defer c.CloseWithContext(ctx)
+	time.Sleep(2 * time.Second)
+
+	c, err := opcua.NewClient("opc.tcp://localhost:4840", opcua.SecurityMode(ua.MessageSecurityModeNone))
+	require.NoError(t, err, "NewClient failed")
+
+	err = c.Connect(ctx)
+	require.NoError(t, err, "Connect failed")
+	defer c.Close(ctx)
 
 	for _, tt := range tests {
 		t.Run(tt.id.String(), func(t *testing.T) {
@@ -45,6 +49,7 @@ func TestRead(t *testing.T) {
 				testRead(t, ctx, c, tt.v, tt.id)
 			})
 			t.Run("RegisteredRead", func(t *testing.T) {
+				t.Skip("Not implemented in server")
 				testRegisteredRead(t, ctx, c, tt.v, tt.id)
 			})
 		})
@@ -54,32 +59,24 @@ func TestRead(t *testing.T) {
 func testRead(t *testing.T, ctx context.Context, c *opcua.Client, v interface{}, id *ua.NodeID) {
 	t.Helper()
 
-	resp, err := c.ReadWithContext(ctx, &ua.ReadRequest{
+	resp, err := c.Read(ctx, &ua.ReadRequest{
 		NodesToRead: []*ua.ReadValueID{
-			&ua.ReadValueID{NodeID: id},
+			{NodeID: id},
 		},
 		TimestampsToReturn: ua.TimestampsToReturnBoth,
 	})
-	if err != nil {
-		t.Fatalf("Read failed: %s", err)
-	}
-	if resp.Results[0].Status != ua.StatusOK {
-		t.Fatalf("Status not OK: %v", resp.Results[0].Status)
-	}
-	if got, want := resp.Results[0].Value.Value(), v; !verify.Values(t, "", got, want) {
-		t.Fail()
-	}
+	require.NoError(t, err, "Read failed")
+	require.Equal(t, ua.StatusOK, resp.Results[0].Status, "Status not OK")
+	require.Equal(t, v, resp.Results[0].Value.Value(), "Results[0].Value not equal")
 }
 
 func testRegisteredRead(t *testing.T, ctx context.Context, c *opcua.Client, v interface{}, id *ua.NodeID) {
 	t.Helper()
 
-	resp, err := c.RegisterNodesWithContext(ctx, &ua.RegisterNodesRequest{
+	resp, err := c.RegisterNodes(ctx, &ua.RegisterNodesRequest{
 		NodesToRegister: []*ua.NodeID{id},
 	})
-	if err != nil {
-		t.Fatalf("RegisterNodes failed: %s", err)
-	}
+	require.NoError(t, err, "RegisterNodes failed")
 
 	testRead(t, ctx, c, v, resp.RegisteredNodeIDs[0])
 	testRead(t, ctx, c, v, resp.RegisteredNodeIDs[0])
@@ -87,10 +84,8 @@ func testRegisteredRead(t *testing.T, ctx context.Context, c *opcua.Client, v in
 	testRead(t, ctx, c, v, resp.RegisteredNodeIDs[0])
 	testRead(t, ctx, c, v, resp.RegisteredNodeIDs[0])
 
-	_, err = c.UnregisterNodesWithContext(ctx, &ua.UnregisterNodesRequest{
+	_, err = c.UnregisterNodes(ctx, &ua.UnregisterNodesRequest{
 		NodesToUnregister: []*ua.NodeID{id},
 	})
-	if err != nil {
-		t.Fatalf("UnregisterNodes failed: %s", err)
-	}
+	require.NoError(t, err, "UnregisterNodes failed")
 }

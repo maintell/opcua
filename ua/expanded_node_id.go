@@ -104,12 +104,19 @@ func (e *ExpandedNodeID) Decode(b []byte) (int, error) {
 
 func (e *ExpandedNodeID) Encode() ([]byte, error) {
 	buf := NewBuffer(nil)
-	buf.WriteStruct(e.NodeID)
-	if e.HasNamespaceURI() {
-		buf.WriteString(e.NamespaceURI)
+	if e == nil {
+		return []byte{}, errors.New("e was nil")
 	}
-	if e.HasServerIndex() {
-		buf.WriteUint32(e.ServerIndex)
+	if e.NodeID == nil {
+		buf.WriteInt16(0)
+	} else {
+		buf.WriteStruct(e.NodeID)
+		if e.HasNamespaceURI() {
+			buf.WriteString(e.NamespaceURI)
+		}
+		if e.HasServerIndex() {
+			buf.WriteUint32(e.ServerIndex)
+		}
 	}
 	return buf.Bytes(), buf.Error()
 
@@ -141,14 +148,12 @@ func ParseExpandedNodeID(s string, ns []string) (*ExpandedNodeID, error) {
 
 	var nsval, idval string
 
-	p := strings.SplitN(s, ";", 3)
+	p := strings.SplitN(s, ";", 2)
 	switch len(p) {
 	case 1:
 		nsval, idval = "ns=0", p[0]
 	case 2:
 		nsval, idval = p[0], p[1]
-	default:
-		return nil, errors.Errorf("invalid node id: %s", s)
 	}
 
 	// parse namespace

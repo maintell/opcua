@@ -11,6 +11,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/gopcua/opcua/debug"
 	"github.com/gopcua/opcua/errors"
@@ -89,7 +90,7 @@ func (d *Dialer) Dial(ctx context.Context, endpoint string) (*Conn, error) {
 	}
 
 	debug.Printf("uacp %d: start HEL/ACK handshake", conn.id)
-	if err := conn.Handshake(endpoint); err != nil {
+	if err := conn.Handshake(ctx, endpoint); err != nil {
 		debug.Printf("uacp %d: HEL/ACK handshake failed: %s", conn.id, err)
 		conn.Close()
 		return nil, err
@@ -217,7 +218,7 @@ func (c *Conn) close() error {
 	return c.TCPConn.Close()
 }
 
-func (c *Conn) Handshake(endpoint string) error {
+func (c *Conn) Handshake(ctx context.Context, endpoint string) error {
 	hel := &Hello{
 		Version:        c.ack.Version,
 		ReceiveBufSize: c.ack.ReceiveBufSize,
@@ -225,6 +226,11 @@ func (c *Conn) Handshake(endpoint string) error {
 		MaxMessageSize: c.ack.MaxMessageSize,
 		MaxChunkCount:  c.ack.MaxChunkCount,
 		EndpointURL:    endpoint,
+	}
+
+	// set a deadline if there is one
+	if dl, ok := ctx.Deadline(); ok {
+		c.SetDeadline(dl)
 	}
 
 	if err := c.Send("HELF", hel); err != nil {
@@ -235,6 +241,9 @@ func (c *Conn) Handshake(endpoint string) error {
 	if err != nil {
 		return err
 	}
+
+	// clear the deadline
+	c.SetDeadline(time.Time{})
 
 	msgtyp := string(b[:4])
 	switch msgtyp {
@@ -289,10 +298,12 @@ func (c *Conn) srvhandshake(endpoint string) error {
 			c.SendError(ua.StatusBadTCPInternalError)
 			return err
 		}
-		if hel.EndpointURL != endpoint {
-			c.SendError(ua.StatusBadTCPEndpointURLInvalid)
-			return errors.Errorf("uacp: invalid endpoint url %s", hel.EndpointURL)
-		}
+		// TODO (dh): Temporarily disabled until a proper fix can be implemented.
+		// Problem is that when listening on a random port, (eg. :0), this check fails
+		//if hel.EndpointURL != endpoint {
+		//	c.SendError(ua.StatusBadTCPEndpointURLInvalid)
+		//	return fmt.Errorf("uacp: invalid endpoint url %s", hel.EndpointURL)
+		//}
 		if err := c.Send("ACKF", c.ack); err != nil {
 			c.SendError(ua.StatusBadTCPInternalError)
 			return err
@@ -358,7 +369,10 @@ func (c *Conn) Receive() ([]byte, error) {
 	}
 
 	if h.MessageSize > c.ack.ReceiveBufSize {
-		return nil, errors.Errorf("uacp: message too large: %d > %d bytes", h.MessageSize, c.ack.ReceiveBufSize)
+		return nil, errors.Errorf("uacp: message too large: %d > %d bytes. MsgType=%s, ChunkType=%c", h.MessageSize, c.ack.ReceiveBufSize, h.MessageType, h.ChunkType)
+	}
+	if h.MessageSize < hdrlen {
+		return nil, errors.Errorf("uacp: message too small: %d bytes. MsgType=%s, ChunkType=%c.", h.MessageSize, h.MessageType, h.ChunkType)
 	}
 
 	if _, err := io.ReadFull(c, b[hdrlen:h.MessageSize]); err != nil {
