@@ -8,10 +8,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"math"
-	"reflect"
 	"testing"
 
 	"github.com/gopcua/opcua/errors"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNodeID(t *testing.T) {
@@ -152,10 +152,14 @@ func TestParseNodeID(t *testing.T) {
 		{s: "ns=1;b=YWJj", n: NewByteStringNodeID(1, []byte{'a', 'b', 'c'})},
 		{s: "ns=1;s=a", n: NewStringNodeID(1, "a")},
 		{s: "ns=1;a", n: NewStringNodeID(1, "a")},
+		{s: "ns=1;s=foo;bar;", n: NewStringNodeID(1, "foo;bar;")},
+
+		// from https://github.com/Azure-Samples/iot-edge-opc-plc
+		{s: "ns=5;s=Special_\"!§$%&/()=?`´\\\\+~*\\'#_-:.;,<>|@^°€µ{[]}", n: NewStringNodeID(5, "Special_\"!§$%&/()=?`´\\\\+~*\\'#_-:.;,<>|@^°€µ{[]}")},
 
 		// error flows
 		{s: "abc=0;i=2", err: errors.New("invalid node id: abc=0;i=2")},
-		{s: "ns=0;i=1;s=2", err: errors.New("invalid node id: ns=0;i=1;s=2")},
+		{s: "ns=0;i=1;s=2", err: errors.New("invalid numeric id: ns=0;i=1;s=2")},
 		{s: "ns=0", err: errors.New("invalid node id: ns=0")},
 		{s: "nsu=abc;i=1", err: errors.New("namespace urls require a server NamespaceArray")},
 		{s: "ns=65536;i=1", err: errors.New("namespace id out of range (0..65535): ns=65536;i=1")},
@@ -169,12 +173,8 @@ func TestParseNodeID(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.s, func(t *testing.T) {
 			n, err := ParseNodeID(c.s)
-			if got, want := err, c.err; !errors.Equal(got, want) {
-				t.Fatalf("got error %v want %v", got, want)
-			}
-			if got, want := n, c.n; !reflect.DeepEqual(got, want) {
-				t.Fatalf("\ngot  %#v\nwant %#v", got, want)
-			}
+			require.Equal(t, c.err, err, "Error not equal")
+			require.Equal(t, c.n, n, "Parsed NodeID not equal")
 		})
 	}
 }
@@ -193,9 +193,7 @@ func TestStringID(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got, want := c.n.String(), c.s; got != want {
-				t.Fatalf("got %s want %s", got, want)
-			}
+			require.Equal(t, c.s, c.n.String())
 		})
 	}
 }
@@ -262,22 +260,17 @@ func TestSetIntID(t *testing.T) {
 			v := tt.n.IntID()
 
 			// sanity check
-			if before, after := v, tt.v; before == after {
-				t.Fatalf("before == after: %d == %d", before, after)
-			}
+			require.NotEqual(t, tt.v, v, "before == after: %d == %d", v, tt.v)
 
 			err := tt.n.SetIntID(tt.v)
-			if got, want := err, tt.err; !errors.Equal(got, want) {
-				t.Fatalf("got error %v want %v", got, want)
-			}
+			require.Equal(t, tt.err, err)
+
 			// if the test should fail and the error was correct
 			// we need to stop here.
 			if tt.err != nil {
 				return
 			}
-			if got, want := tt.n.IntID(), tt.v; got != want {
-				t.Fatalf("got value %d want %d", got, want)
-			}
+			require.Equal(t, tt.v, tt.n.IntID(), "IntID not equal")
 		})
 	}
 }
@@ -338,22 +331,17 @@ func TestSetStringID(t *testing.T) {
 			v := tt.n.StringID()
 
 			// sanity check
-			if before, after := v, tt.v; before == after {
-				t.Fatalf("before == after: %s == %s", before, after)
-			}
+			require.NotEqual(t, tt.v, v, "before == after: %s == %s", v, tt.v)
 
 			err := tt.n.SetStringID(tt.v)
-			if got, want := err, tt.err; !errors.Equal(got, want) {
-				t.Fatalf("got error %q (%T) want %q (%T)", got, got, want, want)
-			}
+			require.Equal(t, tt.err, err)
+
 			// if the test should fail and the error was correct
 			// we need to stop here.
 			if tt.err != nil {
 				return
 			}
-			if got, want := tt.n.StringID(), tt.v; got != want {
-				t.Fatalf("got value %s want %s", got, want)
-			}
+			require.Equal(t, tt.v, tt.n.StringID())
 		})
 	}
 }
@@ -400,17 +388,14 @@ func TestSetNamespace(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.n.SetNamespace(tt.v)
-			if got, want := err, tt.err; !errors.Equal(got, want) {
-				t.Fatalf("got error %v want %v", got, want)
-			}
+			require.Equal(t, tt.err, err)
+
 			// if the test should fail and the error was correct
 			// we need to stop here.
 			if tt.err != nil {
 				return
 			}
-			if got, want := tt.n.Namespace(), tt.v; got != want {
-				t.Fatalf("got value %d want %d", got, want)
-			}
+			require.Equal(t, tt.v, tt.n.Namespace())
 		})
 	}
 }
@@ -418,64 +403,43 @@ func TestSetNamespace(t *testing.T) {
 func TestNodeIDJSON(t *testing.T) {
 	t.Run("value", func(t *testing.T) {
 		n, err := ParseNodeID(`ns=4;s=abc`)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
+
 		b, err := json.Marshal(n)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got, want := string(b), `"ns=4;s=abc"`; got != want {
-			t.Fatalf("got %s want %s", got, want)
-		}
+		require.NoError(t, err)
+		require.Equal(t, `"ns=4;s=abc"`, string(b))
+
 		var nn NodeID
-		if err := json.Unmarshal(b, &nn); err != nil {
-			t.Fatal(err)
-		}
-		if got, want := nn.String(), n.String(); got != want {
-			t.Fatalf("got %s want %s", got, want)
-		}
+		err = json.Unmarshal(b, &nn)
+		require.NoError(t, err)
+		require.Equal(t, n.String(), nn.String(), "NodeIDs not equal")
 	})
 
 	t.Run("nil", func(t *testing.T) {
 		var n *NodeID
 		b, err := json.Marshal(n)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got, want := string(b), "null"; got != want {
-			t.Fatalf("got %s want %s", got, want)
-		}
+		require.NoError(t, err)
+		require.Equal(t, "null", string(b))
 	})
 
 	type X struct{ N *NodeID }
 	t.Run("struct", func(t *testing.T) {
 		x := X{NewStringNodeID(4, "abc")}
 		b, err := json.Marshal(x)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got, want := string(b), `{"N":"ns=4;s=abc"}`; got != want {
-			t.Fatalf("got %s want %s", got, want)
-		}
+		require.NoError(t, err)
+		require.Equal(t, `{"N":"ns=4;s=abc"}`, string(b))
 	})
 
 	t.Run("nil struct", func(t *testing.T) {
 		var x X
 		b, err := json.Marshal(x)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got, want := string(b), `{"N":null}`; got != want {
-			t.Fatalf("got %s want %s", got, want)
-		}
+		require.NoError(t, err)
+		require.Equal(t, `{"N":null}`, string(b))
+
 		var xx X
-		if err := json.Unmarshal(b, &xx); err != nil {
-			t.Fatal(err)
-		}
-		if got, want := xx, x; !reflect.DeepEqual(got, want) {
-			t.Fatalf("got %s want %s", got, want)
-		}
+		err = json.Unmarshal(b, &xx)
+		require.NoError(t, err)
+		require.Equal(t, x, xx)
 	})
 }
 
@@ -503,12 +467,74 @@ func TestNodeIDToString(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.s, func(t *testing.T) {
 			n, err := ParseNodeID(tt.s)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got, want := n.String(), tt.want; got != want {
-				t.Fatalf("got %s want %s", got, want)
-			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, n.String())
+		})
+	}
+}
+
+func TestNewNodeIDFromExpandedNodeID(t *testing.T) {
+	type args struct {
+		id *ExpandedNodeID
+	}
+	tests := []struct {
+		name string
+		args args
+		want *NodeID
+	}{
+		{
+			name: "NewExpandedNodeID",
+			args: args{
+				id: NewExpandedNodeID(NewTwoByteNodeID(42), "someUri", 42),
+			},
+			want: NewTwoByteNodeID(42),
+		},
+		{
+			name: "NewTwoByteExpandedNodeID",
+			args: args{
+				id: NewTwoByteExpandedNodeID(42),
+			},
+			want: NewTwoByteNodeID(42),
+		},
+		{
+			name: "NewFourByteExpandedNodeID",
+			args: args{
+				NewFourByteExpandedNodeID(42, 24),
+			},
+			want: NewFourByteNodeID(42, 24),
+		},
+		{
+			name: "NewNumericExpandedNodeID",
+			args: args{
+				NewNumericExpandedNodeID(42, 24),
+			},
+			want: NewNumericNodeID(42, 24),
+		},
+		{
+			name: "NewStringExpandedNodeID",
+			args: args{
+				NewStringExpandedNodeID(42, "42"),
+			},
+			want: NewStringNodeID(42, "42"),
+		},
+		{
+			name: "NewGUIDExpandedNodeID",
+			args: args{
+				NewGUIDExpandedNodeID(42, "42"),
+			},
+			want: NewGUIDNodeID(42, "42"),
+		},
+		{
+			name: "NewByteStringExpandedNodeID",
+			args: args{
+				NewByteStringExpandedNodeID(42, []byte{0xAF, 0xFE}),
+			},
+			want: NewByteStringNodeID(42, []byte{0xAF, 0xFE}),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, NewNodeIDFromExpandedNodeID(tt.args.id))
 		})
 	}
 }

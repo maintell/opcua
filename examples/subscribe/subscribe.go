@@ -37,15 +37,17 @@ func main() {
 	d := 60 * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
+	log.Printf("Subscription will stop after %s for demonstration purposes", d)
 
 	endpoints, err := opcua.GetEndpoints(ctx, *endpoint)
 	if err != nil {
 		log.Fatal(err)
 	}
-	ep := opcua.SelectEndpoint(endpoints, *policy, ua.MessageSecurityModeFromString(*mode))
-	if ep == nil {
-		log.Fatal("Failed to find suitable endpoint")
+	ep, err := opcua.SelectEndpoint(endpoints, *policy, ua.MessageSecurityModeFromString(*mode))
+	if err != nil {
+		log.Fatal(err)
 	}
+	ep.EndpointURL = *endpoint
 
 	fmt.Println("*", ep.SecurityPolicyURI, ep.SecurityMode)
 
@@ -58,15 +60,18 @@ func main() {
 		opcua.SecurityFromEndpoint(ep, ua.UserTokenTypeAnonymous),
 	}
 
-	c := opcua.NewClient(ep.EndpointURL, opts...)
+	c, err := opcua.NewClient(ep.EndpointURL, opts...)
+	if err != nil {
+		log.Fatal(err)
+	}
 	if err := c.Connect(ctx); err != nil {
 		log.Fatal(err)
 	}
-	defer c.CloseWithContext(ctx)
+	defer c.Close(ctx)
 
 	notifyCh := make(chan *opcua.PublishNotificationData)
 
-	sub, err := c.Subscribe(&opcua.SubscriptionParameters{
+	sub, err := c.Subscribe(ctx, &opcua.SubscriptionParameters{
 		Interval: *interval,
 	}, notifyCh)
 	if err != nil {
@@ -87,10 +92,18 @@ func main() {
 	} else {
 		miCreateRequest = valueRequest(id)
 	}
-	res, err := sub.Monitor(ua.TimestampsToReturnBoth, miCreateRequest)
+	res, err := sub.Monitor(ctx, ua.TimestampsToReturnBoth, miCreateRequest)
 	if err != nil || res.Results[0].StatusCode != ua.StatusOK {
 		log.Fatal(err)
 	}
+
+	// Uncomment the following to try modifying the subscription
+	//
+	// var params opcua.SubscriptionParameters
+	// params.Interval = time.Millisecond * 2000
+	// if _, err := sub.ModifySubscription(ctx, params); err != nil {
+	// 	log.Fatal(err)
+	// }
 
 	// read from subscription's notification channel until ctx is cancelled
 	for {

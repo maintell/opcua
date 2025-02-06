@@ -1,5 +1,4 @@
 //go:build integration
-// +build integration
 
 package uatest
 
@@ -11,6 +10,7 @@ import (
 	"github.com/gopcua/opcua"
 	"github.com/gopcua/opcua/monitor"
 	"github.com/gopcua/opcua/ua"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -24,19 +24,18 @@ const (
 func TestAutoReconnection(t *testing.T) {
 	ctx := context.Background()
 
-	srv := NewServer("reconnection_server.py")
+	srv := NewPythonServer("reconnection_server.py")
 	defer srv.Close()
 
-	c := opcua.NewClient(srv.Endpoint, srv.Opts...)
-	if err := c.Connect(ctx); err != nil {
-		t.Fatal(err)
-	}
-	defer c.CloseWithContext(ctx)
+	c, err := opcua.NewClient(srv.Endpoint, srv.Opts...)
+	require.NoError(t, err, "NewClient failed")
+
+	err = c.Connect(ctx)
+	require.NoError(t, err, "Connect failed")
+	defer c.Close(ctx)
 
 	m, err := monitor.NewNodeMonitor(c)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err, "NewNodeMonitor failed")
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -89,21 +88,18 @@ func TestAutoReconnection(t *testing.T) {
 		ch,
 		currentTimeNodeID,
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err, "ChanSubscribe failed")
 	defer sub.Unsubscribe(ctx)
 
 	for _, tt := range tests {
-		ok := t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 
-			if msg := <-ch; msg.Error != nil {
-				t.Fatalf("No error expected for first value: %s", msg.Error)
-			}
+			msg := <-ch
+			require.NoError(t, msg.Error, "No error expected for first value")
 
 			downC := make(chan struct{}, 1)
 			dTimeout := time.NewTimer(disconnectTimeout)
-			go c.CallWithContext(ctx, tt.req)
+			go c.Call(ctx, tt.req)
 
 			ctx, cancel := context.WithCancel(context.Background())
 			go func() {
@@ -129,7 +125,7 @@ func TestAutoReconnection(t *testing.T) {
 			select {
 			case <-dTimeout.C:
 				cancel()
-				t.Fatal("Timeout reached, the connection did not go down as expected")
+				require.Fail(t, "Timeout reached, the connection did not go down as expected")
 			case <-downC:
 			}
 
@@ -141,16 +137,10 @@ func TestAutoReconnection(t *testing.T) {
 			rTimeout := time.NewTimer(reconnectionTimeout)
 			select {
 			case <-rTimeout.C:
-				t.Fatal("Timeout reached, reconnection failed")
+				require.Fail(t, "Timeout reached, reconnection failed")
 			case msg := <-ch:
-				if err := msg.Error; err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, msg.Error)
 			}
 		})
-
-		if !ok {
-			t.FailNow()
-		}
 	}
 }

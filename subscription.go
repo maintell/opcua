@@ -22,8 +22,6 @@ const (
 	DefaultSubscriptionPriority                   = 0
 )
 
-const terminatedSubscriptionID uint32 = 0xC0CAC01B
-
 type Subscription struct {
 	SubscriptionID            uint32
 	RevisedPublishingInterval time.Duration
@@ -31,6 +29,7 @@ type Subscription struct {
 	RevisedMaxKeepAliveCount  uint32
 	Notifs                    chan<- *PublishNotificationData
 	params                    *SubscriptionParameters
+	paramsMu                  sync.Mutex
 	items                     map[uint32]*monitoredItem
 	itemsMu                   sync.Mutex
 	lastSeq                   uint32
@@ -94,7 +93,7 @@ func (s *Subscription) delete(ctx context.Context) error {
 	}
 
 	var res *ua.DeleteSubscriptionsResponse
-	err := s.c.SendWithContext(ctx, req, func(v interface{}) error {
+	err := s.c.Send(ctx, req, func(v ua.Response) error {
 		return safeAssign(v, &res)
 	})
 
@@ -111,14 +110,41 @@ func (s *Subscription) delete(ctx context.Context) error {
 	}
 }
 
-// Note: Starting with v0.5 this method will require a context
-// and the corresponding XXXWithContext(ctx) method will be removed.
-func (s *Subscription) Monitor(ts ua.TimestampsToReturn, items ...*ua.MonitoredItemCreateRequest) (*ua.CreateMonitoredItemsResponse, error) {
-	return s.MonitorWithContext(context.Background(), ts, items...)
+func (s *Subscription) ModifySubscription(ctx context.Context, params SubscriptionParameters) (*ua.ModifySubscriptionResponse, error) {
+	stats.Subscription().Add("ModifySubscription", 1)
+
+	params.setDefaults()
+	req := &ua.ModifySubscriptionRequest{
+		SubscriptionID:              s.SubscriptionID,
+		RequestedPublishingInterval: float64(params.Interval.Milliseconds()),
+		RequestedLifetimeCount:      params.LifetimeCount,
+		RequestedMaxKeepAliveCount:  params.MaxKeepAliveCount,
+		MaxNotificationsPerPublish:  params.MaxNotificationsPerPublish,
+		Priority:                    params.Priority,
+	}
+
+	var res *ua.ModifySubscriptionResponse
+	err := s.c.Send(ctx, req, func(v ua.Response) error {
+		return safeAssign(v, &res)
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	// update subscription parameters
+	s.paramsMu.Lock()
+	s.params = &params
+	s.paramsMu.Unlock()
+	// update revised subscription parameters
+	s.RevisedPublishingInterval = time.Duration(res.RevisedPublishingInterval) * time.Millisecond
+	s.RevisedLifetimeCount = res.RevisedLifetimeCount
+	s.RevisedMaxKeepAliveCount = res.RevisedMaxKeepAliveCount
+
+	return res, nil
 }
 
-// Note: Starting with v0.5 this method is superseded by the non 'WithContext' method.
-func (s *Subscription) MonitorWithContext(ctx context.Context, ts ua.TimestampsToReturn, items ...*ua.MonitoredItemCreateRequest) (*ua.CreateMonitoredItemsResponse, error) {
+func (s *Subscription) Monitor(ctx context.Context, ts ua.TimestampsToReturn, items ...*ua.MonitoredItemCreateRequest) (*ua.CreateMonitoredItemsResponse, error) {
 	stats.Subscription().Add("Monitor", 1)
 	stats.Subscription().Add("MonitoredItems", int64(len(items)))
 
@@ -130,7 +156,7 @@ func (s *Subscription) MonitorWithContext(ctx context.Context, ts ua.TimestampsT
 	}
 
 	var res *ua.CreateMonitoredItemsResponse
-	err := s.c.SendWithContext(ctx, req, func(v interface{}) error {
+	err := s.c.Send(ctx, req, func(v ua.Response) error {
 		return safeAssign(v, &res)
 	})
 
@@ -153,14 +179,7 @@ func (s *Subscription) MonitorWithContext(ctx context.Context, ts ua.TimestampsT
 	return res, err
 }
 
-// Note: Starting with v0.5 this method will require a context
-// and the corresponding XXXWithContext(ctx) method will be removed.
-func (s *Subscription) Unmonitor(monitoredItemIDs ...uint32) (*ua.DeleteMonitoredItemsResponse, error) {
-	return s.UnmonitorWithContext(context.Background(), monitoredItemIDs...)
-}
-
-// Note: Starting with v0.5 this method is superseded by the non 'WithContext' method.
-func (s *Subscription) UnmonitorWithContext(ctx context.Context, monitoredItemIDs ...uint32) (*ua.DeleteMonitoredItemsResponse, error) {
+func (s *Subscription) Unmonitor(ctx context.Context, monitoredItemIDs ...uint32) (*ua.DeleteMonitoredItemsResponse, error) {
 	stats.Subscription().Add("Unmonitor", 1)
 	stats.Subscription().Add("UnmonitoredItems", int64(len(monitoredItemIDs)))
 
@@ -170,41 +189,41 @@ func (s *Subscription) UnmonitorWithContext(ctx context.Context, monitoredItemID
 	}
 
 	var res *ua.DeleteMonitoredItemsResponse
-	err := s.c.SendWithContext(ctx, req, func(v interface{}) error {
+	err := s.c.Send(ctx, req, func(v ua.Response) error {
 		return safeAssign(v, &res)
 	})
-
-	if err == nil {
-		// remove monitored items
-		s.itemsMu.Lock()
-		for _, id := range monitoredItemIDs {
-			delete(s.items, id)
-		}
-		s.itemsMu.Unlock()
+	if err != nil {
+		return nil, err
 	}
 
-	return res, err
+	// remove monitored items
+	s.itemsMu.Lock()
+	for _, id := range monitoredItemIDs {
+		delete(s.items, id)
+	}
+	s.itemsMu.Unlock()
+
+	return res, nil
 }
 
-// Note: Starting with v0.5 this method will require a context
-// and the corresponding XXXWithContext(ctx) method will be removed.
-func (s *Subscription) ModifyMonitoredItems(ts ua.TimestampsToReturn, items ...*ua.MonitoredItemModifyRequest) (*ua.ModifyMonitoredItemsResponse, error) {
-	return s.ModifyMonitoredItemsWithContext(context.Background(), ts, items...)
-}
-
-// Note: Starting with v0.5 this method is superseded by the non 'WithContext' method.
-func (s *Subscription) ModifyMonitoredItemsWithContext(ctx context.Context, ts ua.TimestampsToReturn, items ...*ua.MonitoredItemModifyRequest) (*ua.ModifyMonitoredItemsResponse, error) {
+func (s *Subscription) ModifyMonitoredItems(ctx context.Context, ts ua.TimestampsToReturn, items ...*ua.MonitoredItemModifyRequest) (*ua.ModifyMonitoredItemsResponse, error) {
 	stats.Subscription().Add("ModifyMonitoredItems", 1)
 	stats.Subscription().Add("ModifiedMonitoredItems", int64(len(items)))
 
+	var err error
 	s.itemsMu.Lock()
 	for _, item := range items {
 		id := item.MonitoredItemID
 		if _, exists := s.items[id]; !exists {
-			return nil, fmt.Errorf("sub %d: cannot modify unknown monitored item id: %d", s.SubscriptionID, id)
+			err = fmt.Errorf("sub %d: cannot modify unknown monitored item id: %d", s.SubscriptionID, id)
+			break
 		}
 	}
 	s.itemsMu.Unlock()
+
+	if err != nil {
+		return nil, err
+	}
 
 	req := &ua.ModifyMonitoredItemsRequest{
 		SubscriptionID:     s.SubscriptionID,
@@ -212,7 +231,9 @@ func (s *Subscription) ModifyMonitoredItemsWithContext(ctx context.Context, ts u
 		ItemsToModify:      items,
 	}
 	var res *ua.ModifyMonitoredItemsResponse
-	err := s.c.SendWithContext(ctx, req, func(v interface{}) error {
+
+	err = s.c.Send(ctx, req, func(v ua.Response) error {
+
 		return safeAssign(v, &res)
 	})
 	if err != nil {
@@ -240,18 +261,44 @@ func (s *Subscription) ModifyMonitoredItemsWithContext(ctx context.Context, ts u
 	return res, nil
 }
 
+func (s *Subscription) SetMonitoringMode(ctx context.Context, monitoringMode ua.MonitoringMode, monitoredItemIDs ...uint32) (*ua.SetMonitoringModeResponse, error) {
+	stats.Subscription().Add("SetMonitoringMode", 1)
+	stats.Subscription().Add("SetMonitoringModeMonitoredItems", int64(len(monitoredItemIDs)))
+
+	var err error
+	s.itemsMu.Lock()
+	for _, id := range monitoredItemIDs {
+		if _, exists := s.items[id]; !exists {
+			err = fmt.Errorf("sub %d: cannot set monitoring mode for unknown monitored item id: %d", s.SubscriptionID, id)
+			break
+		}
+	}
+	s.itemsMu.Unlock()
+
+	if err != nil {
+		return nil, err
+	}
+
+	req := &ua.SetMonitoringModeRequest{
+		SubscriptionID:   s.SubscriptionID,
+		MonitoringMode:   monitoringMode,
+		MonitoredItemIDs: monitoredItemIDs,
+	}
+	var res *ua.SetMonitoringModeResponse
+	err = s.c.Send(ctx, req, func(v ua.Response) error {
+		return safeAssign(v, &res)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return res, nil
+}
+
 // SetTriggering sends a request to the server to add and/or remove triggering links from a triggering item.
 // To add links from a triggering item to an item to report provide the server assigned ID(s) in the `add` argument.
 // To remove links from a triggering item to an item to report provide the server assigned ID(s) in the `remove` argument.
-//
-// Note: Starting with v0.5 this method will require a context
-// and the corresponding XXXWithContext(ctx) method will be removed.
-func (s *Subscription) SetTriggering(triggeringItemID uint32, add, remove []uint32) (*ua.SetTriggeringResponse, error) {
-	return s.SetTriggeringWithContext(context.Background(), triggeringItemID, add, remove)
-}
-
-// Note: Starting with v0.5 this method is superseded by the non 'WithContext' method.
-func (s *Subscription) SetTriggeringWithContext(ctx context.Context, triggeringItemID uint32, add, remove []uint32) (*ua.SetTriggeringResponse, error) {
+func (s *Subscription) SetTriggering(ctx context.Context, triggeringItemID uint32, add, remove []uint32) (*ua.SetTriggeringResponse, error) {
 	stats.Subscription().Add("SetTriggering", 1)
 
 	// Part 4, 5.12.5.2 SetTriggering Service Parameters
@@ -263,7 +310,7 @@ func (s *Subscription) SetTriggeringWithContext(ctx context.Context, triggeringI
 	}
 
 	var res *ua.SetTriggeringResponse
-	err := s.c.SendWithContext(ctx, req, func(v interface{}) error {
+	err := s.c.Send(ctx, req, func(v ua.Response) error {
 		return safeAssign(v, &res)
 	})
 	return res, err
@@ -289,27 +336,31 @@ func (s *Subscription) notify(ctx context.Context, data *PublishNotificationData
 }
 
 // Stats returns a diagnostic struct with metadata about the current subscription
-//
-// Note: Starting with v0.5 this method will require a context
-// and the corresponding XXXWithContext(ctx) method will be removed.
-func (s *Subscription) Stats() (*ua.SubscriptionDiagnosticsDataType, error) {
-	return s.StatsWithContext(context.Background())
-}
-
-// Note: Starting with v0.5 this method is superseded by the non 'WithContext' method.
-func (s *Subscription) StatsWithContext(ctx context.Context) (*ua.SubscriptionDiagnosticsDataType, error) {
+func (s *Subscription) Stats(ctx context.Context) (*ua.SubscriptionDiagnosticsDataType, error) {
 	// TODO(kung-foo): once browsing feature is merged, attempt to get direct access to the
 	// diagnostics node. for example, Prosys lists them like:
 	// i=2290/ns=1;g=918ee6f4-2d25-4506-980d-e659441c166d
 	// maybe cache the nodeid to speed up future stats queries
 	node := s.c.Node(ua.NewNumericNodeID(0, id.Server_ServerDiagnostics_SubscriptionDiagnosticsArray))
-	v, err := node.ValueWithContext(ctx)
+	v, err := node.Value(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	for _, eo := range v.Value().([]*ua.ExtensionObject) {
-		stat := eo.Value.(*ua.SubscriptionDiagnosticsDataType)
+	if v == nil {
+		return nil, errors.Errorf("empty SubscriptionDiagnostics for sub=%d", s.SubscriptionID)
+	}
+
+	eos, ok := v.Value().([]*ua.ExtensionObject)
+	if !ok {
+		return nil, errors.Errorf("invalid type for SubscriptionDiagnosticsArray. Want []*ua.ExtensionObject. subID=%d nodeID=%s type=%T", s.SubscriptionID, node.String(), v.Value())
+	}
+
+	for _, eo := range eos {
+		stat, ok := eo.Value.(*ua.SubscriptionDiagnosticsDataType)
+		if !ok {
+			continue
+		}
 
 		if stat.SubscriptionID == s.SubscriptionID {
 			return stat, nil
@@ -340,29 +391,31 @@ func (p *SubscriptionParameters) setDefaults() {
 	}
 }
 
-// recreate creates a new subscription based on the previous subscription
-// parameters and monitored items.
-func (s *Subscription) recreate(ctx context.Context) error {
-	dlog := debug.NewPrefixLogger("sub %d: recreate: ", s.SubscriptionID)
-
-	if s.SubscriptionID == terminatedSubscriptionID {
-		dlog.Printf("subscription is not in a valid state")
-		return nil
+// recreate_delete is called by the client when it is trying to
+// recreate an existing subscription. This function deletes the
+// existing subscription from the server.
+func (s *Subscription) recreate_delete(ctx context.Context) error {
+	dlog := debug.NewPrefixLogger("sub %d: recreate_delete: ", s.SubscriptionID)
+	req := &ua.DeleteSubscriptionsRequest{
+		SubscriptionIDs: []uint32{s.SubscriptionID},
 	}
+	var res *ua.DeleteSubscriptionsResponse
+	_ = s.c.Send(ctx, req, func(v ua.Response) error {
+		return safeAssign(v, &res)
+	})
+	dlog.Print("subscription deleted")
+	return nil
+}
 
+// recreate_create is called by the client when it is trying to
+// recreate an existing subscription. This function creates a
+// new subscription with the same parameters as the previous one.
+func (s *Subscription) recreate_create(ctx context.Context) error {
+	dlog := debug.NewPrefixLogger("sub %d: recreate_create: ", s.SubscriptionID)
+
+	s.paramsMu.Lock()
 	params := s.params
-	{
-		req := &ua.DeleteSubscriptionsRequest{
-			SubscriptionIDs: []uint32{s.SubscriptionID},
-		}
-		var res *ua.DeleteSubscriptionsResponse
-		_ = s.c.SendWithContext(ctx, req, func(v interface{}) error {
-			return safeAssign(v, &res)
-		})
-		dlog.Print("subscription deleted")
-	}
-	s.c.forgetSubscription(ctx, s.SubscriptionID)
-	dlog.Printf("subscription forgotton")
+	s.paramsMu.Unlock()
 
 	req := &ua.CreateSubscriptionRequest{
 		RequestedPublishingInterval: float64(params.Interval / time.Millisecond),
@@ -373,7 +426,7 @@ func (s *Subscription) recreate(ctx context.Context) error {
 		Priority:                    params.Priority,
 	}
 	var res *ua.CreateSubscriptionResponse
-	err := s.c.SendWithContext(ctx, req, func(v interface{}) error {
+	err := s.c.Send(ctx, req, func(v ua.Response) error {
 		return safeAssign(v, &res)
 	})
 	if err != nil {
@@ -394,7 +447,7 @@ func (s *Subscription) recreate(ctx context.Context) error {
 	s.lastSeq = 0
 	s.nextSeq = 1
 
-	if err := s.c.registerSubscription(s); err != nil {
+	if err := s.c.registerSubscription_NeedsSubMuxLock(s); err != nil {
 		return err
 	}
 	dlog.Printf("subscription registered")
@@ -416,7 +469,7 @@ func (s *Subscription) recreate(ctx context.Context) error {
 		}
 
 		var res *ua.CreateMonitoredItemsResponse
-		err := s.c.SendWithContext(ctx, req, func(v interface{}) error {
+		err := s.c.Send(ctx, req, func(v ua.Response) error {
 			return safeAssign(v, &res)
 		})
 		if err != nil {

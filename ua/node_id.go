@@ -7,6 +7,7 @@ package ua
 import (
 	"encoding/base64"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"math"
 
@@ -75,6 +76,35 @@ func NewByteStringNodeID(ns uint16, id []byte) *NodeID {
 		mask: NodeIDTypeByteString,
 		ns:   ns,
 		bid:  id,
+	}
+}
+
+// NewNodeIDFromExpandedNodeID returns a new NodeID derived from ExpandedNodeID
+func NewNodeIDFromExpandedNodeID(id *ExpandedNodeID) *NodeID {
+	bid := make([]byte, len(id.NodeID.bid))
+	copy(bid, id.NodeID.bid)
+	if len(bid) == 0 {
+		bid = nil
+	}
+	var gid *GUID
+	if egid := id.NodeID.gid; egid != nil {
+		var ngid GUID
+		ngid.Data1 = egid.Data1
+		ngid.Data2 = egid.Data2
+		ngid.Data3 = egid.Data3
+		ngid.Data4 = make([]byte, len(egid.Data4))
+		copy(ngid.Data4, egid.Data4)
+		if len(ngid.Data4) == 0 {
+			ngid.Data4 = nil
+		}
+		gid = &ngid
+	}
+	return &NodeID{
+		mask: id.NodeID.mask & 0b00111111, // expanded flag NamespaceURI and ServerIndex need to be unset
+		ns:   id.NodeID.ns,
+		nid:  id.NodeID.nid,
+		bid:  bid,
+		gid:  gid,
 	}
 }
 
@@ -261,8 +291,13 @@ func (n *NodeID) SetStringID(v string) error {
 // String returns the string representation of the NodeID
 // in the format described by ParseNodeID.
 func (n *NodeID) String() string {
+	if n == nil {
+		return ""
+	}
+
 	switch n.Type() {
 	case NodeIDTypeTwoByte:
+
 		return fmt.Sprintf("i=%d", n.nid)
 
 	case NodeIDTypeFourByte:
@@ -362,6 +397,10 @@ func (n *NodeID) Encode() ([]byte, error) {
 	return buf.Bytes(), buf.Error()
 }
 
+func (n *NodeID) Equal(o *NodeID) bool {
+	return n.String() == o.String()
+}
+
 func (n *NodeID) MarshalJSON() ([]byte, error) {
 	if n == nil {
 		return []byte(`null`), nil
@@ -379,5 +418,19 @@ func (n *NodeID) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	*n = *nid
+	return nil
+}
+
+// todo(fs): not sure if this should exist here. Maybe there are multiple different xml formats?
+func (n *NodeID) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	var s string
+	if err := d.DecodeElement(&s, &start); err != nil {
+		return err
+	}
+	id, err := ParseNodeID(s)
+	if err != nil {
+		return err
+	}
+	*n = *id
 	return nil
 }
